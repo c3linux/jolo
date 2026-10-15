@@ -17,7 +17,7 @@ const chosenModel = valueOf("--model");
 const chosenEffort = valueOf("--effort");
 const MODELS = [
   { value: "default", resolvedModel: "fake-default", displayName: "Default (recommended)", description: "the everyday choice", supportsEffort: true, supportedEffortLevels: ["low", "high"] },
-  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "max"] },
+  { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"] },
   { value: "haiku", resolvedModel: "fake-haiku", displayName: "Haiku", description: "the quick one" },
 ];
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
