@@ -193,7 +193,6 @@ describe("asking a hosted agent how much of its plan is used", () => {
       claude: { transport: "claude-stream", supportsLimits: true },
       codex: { transport: "codex-app-server", supportsLimits: true },
       grok: { transport: "acp", supportsLimits: false },
-      gemini: { transport: "acp", supportsLimits: false },
       antigravity: { transport: "antigravity-stream", supportsLimits: true },
       shell: { transport: "pty", supportsLimits: false },
     });
