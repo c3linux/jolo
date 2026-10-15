@@ -2,7 +2,7 @@
 //
 // Jolo keeps no list of anyone's models: they change without notice, and a stale list is worse than none.
 // Each transport is asked over its own protocol instead — Claude answers its initialize, Codex has
-// model/list, an ACP agent publishes a model selector — so what the user picks from is what that install
+// model/list, an ACP agent publishes a model selector, Antigravity has a models command — so what the user picks from is what that install
 // actually offers today. Settings loads this automatically when opened; recent answers are shared
 // across interactive clients so opening another pane does not start the same agent again.
 import { tmpdir } from "node:os";
@@ -30,17 +30,40 @@ const model = ({ id, displayName, description, isDefault = false, efforts: level
   id, displayName: text(displayName, id), description: text(description), isDefault: Boolean(isDefault), efforts: efforts(levels).slice(0, 20),
 });
 
+/** The thinking levels Antigravity's --effort accepts, from least to most. */
+const ANTIGRAVITY_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Antigravity lists a model once per thinking level ("gemini-4-argon-high", "Gemini 4 Argon (High)") and takes
+ * the level as --effort on the base name, so the variants become one model whose efforts are those levels.
+ * @param {any} listed `command.data.models` from `agy --output-format json models`
+ */
+export function antigravityModels(listed) {
+  const grouped = new Map(); // base id -> { displayName, levels }
+  for (const entry of Array.isArray(listed) ? listed : []) {
+    const id = text(entry?.id);
+    if (!id) continue;
+    const level = ANTIGRAVITY_EFFORTS.find((effort) => id.endsWith(`-${effort}`));
+    const base = level ? id.slice(0, -level.length - 1) : id;
+    const known = grouped.get(base) ?? { displayName: level ? text(entry.label, base).replace(/\s*\([^)]*\)$/, "") : text(entry.label, base), levels: [] };
+    if (level) known.levels.push(level);
+    grouped.set(base, known);
+  }
+  return [...grouped].map(([id, { displayName, levels }]) => model({ id, displayName, description: "", efforts: ANTIGRAVITY_EFFORTS.filter((effort) => levels.includes(effort)) }));
+}
+
 /**
  * Start a hosted agent, ask it one thing, and stop it. `open` speaks first; `ask` returns the answer once it
  * has one. The agent's own failure never throws: it comes back as `{ note, timedOut }` for the caller to word.
  * @param {{ supervisor: any, log: any }} deps
  * @param {any} manifest
  * @param {string[]} argv
+ * @param {number} timeoutMs how long the agent has to answer, inside what its caller's client waits
  * @param {{ open: (send: (message: any) => void) => void, ask: (message: any, send: (message: any) => void) => any }} steps
  */
-export async function probeAgent({ supervisor, log }, manifest, argv, { open, ask }) {
+export async function probeAgent({ supervisor, log }, manifest, argv, timeoutMs, { open, ask }) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let link;
   try {
     link = spawnLineChild({ argv, cwd: tmpdir(), env: hostedEnvironment(supervisor), signal: controller.signal, log, agentId: manifest.id });
@@ -64,7 +87,7 @@ export async function probeAgent({ supervisor, log }, manifest, argv, { open, as
   link.terminate();
   const { exitCode, stderr } = await link.settle();
   if (answer) return answer;
-  if (controller.signal.aborted) return { note: `${manifest.displayName} did not answer within ${PROBE_TIMEOUT_MS / 1000} seconds`, timedOut: true };
+  if (controller.signal.aborted) return { note: `${manifest.displayName} did not answer within ${timeoutMs / 1000} seconds`, timedOut: true };
   return { note: failure ?? `${manifest.displayName} exited ${exitCode ?? "?"} without an answer${stderr ? `: ${stderr.slice(0, 200)}` : ""}`, timedOut: false };
 }
 
@@ -77,7 +100,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
 
   /** The shared probe; an agent too slow to answer leaves the model field as free text. */
   const probe = async (manifest, argv, steps) => {
-    const result = await probeAgent({ supervisor, log }, manifest, argv, steps);
+    const result = await probeAgent({ supervisor, log }, manifest, argv, PROBE_TIMEOUT_MS, steps);
     if (Array.isArray(result.models)) return result;
     return { models: [], note: result.timedOut ? `${result.note}; type the model name it expects` : result.note };
   };
@@ -168,6 +191,19 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
     },
   });
 
+  /** Antigravity answers `models` with one JSON result when asked for JSON output. */
+  const fromAntigravity = (manifest) => {
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    return probe(manifest, [binary, ...extraArgs, "--output-format", "json", "models"], {
+      open: () => {},
+      ask: (message) => {
+        if (message.status && message.status !== "SUCCESS") return { models: [], note: `${manifest.displayName}: ${text(message.error, "did not list its models")}` };
+        const listed = message.command?.data?.models;
+        return Array.isArray(listed) ? { models: antigravityModels(listed), note: null } : null;
+      },
+    });
+  };
+
   return {
     /** Ask one agent what it can run. Never throws for a vendor's own failure: that becomes the note. */
     async list(agentId, { refresh = false } = {}) {
@@ -188,6 +224,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
           if (manifest.transport === "claude-stream") result = await fromClaude(manifest);
           else if (manifest.transport === "codex-app-server") result = await fromCodex(manifest);
           else if (manifest.transport === "acp") result = await fromAcp(manifest);
+          else if (manifest.transport === "antigravity-stream") result = await fromAntigravity(manifest);
           else result = { models: [], note: `Jolo cannot ask a ${manifest.transport} agent for its models` };
         } catch (error) {
           result = { models: [], note: String(error?.message ?? error).slice(0, 300) };

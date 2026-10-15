@@ -177,7 +177,7 @@ describe("asking a hosted agent how much of its plan is used", () => {
   test("an agent that never answers is reported after the probe's wait and asked again next time", async () => {
     const { starts, script, limits } = await boot();
     script("fake-claude", { FAKE_CLAUDE_USAGE: "hang" });
-    expect(await limits("claude", false)).toMatchObject({ agentId: "claude", windows: [], plan: null, source: "none", note: "Claude Code did not answer within 8 seconds" });
+    expect(await limits("claude", false)).toMatchObject({ agentId: "claude", windows: [], plan: null, source: "none", note: "Claude Code did not answer within 15 seconds" });
     expect(starts("fake-claude")).toBe(1);
 
     script("fake-claude", {});
@@ -194,9 +194,10 @@ describe("asking a hosted agent how much of its plan is used", () => {
       codex: { transport: "codex-app-server", supportsLimits: true },
       grok: { transport: "acp", supportsLimits: false },
       gemini: { transport: "acp", supportsLimits: false },
+      antigravity: { transport: "antigravity-stream", supportsLimits: true },
       shell: { transport: "pty", supportsLimits: false },
     });
-    expect(agents.filter((entry) => entry.supportsLimits).map((entry) => entry.id).sort()).toEqual(["claude", "codex"]);
+    expect(agents.filter((entry) => entry.supportsLimits).map((entry) => entry.id).sort()).toEqual(["antigravity", "claude", "codex"]);
   }, 30_000);
 
   test("an unknown agent, a headless client and an agent without limits are answered without starting a CLI", async () => {
