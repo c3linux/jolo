@@ -59,7 +59,7 @@ const RENDERER_METHODS = new Set([
   'task.list', 'task.get',
   "permission.resolve", "run.resume", "workspace.diff", "patch.revert", "board.list", "board.tasks", "board.viewed",
   "workspace.create", "workspace.list", "workspace.remove", "workspace.readFile", "workspace.changes",
-  "agent.catalog", "agent.models", "agent.start", "agent.list", "agent.stop",
+  "agent.catalog", "agent.models", "agent.limits", "agent.start", "agent.list", "agent.stop",
   "plan.create", "plan.list", "plan.get", "plan.start", "plan.pause", "plan.cancel",
   "plan.task.add", "plan.task.update", "plan.task.remove", "plan.task.retry", "plan.task.skip",
   "schedule.create", "schedule.list", "schedule.pause", "schedule.resume", "schedule.cancel",

@@ -282,12 +282,20 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     return runs.find(run => run.state && !TERMINAL.has(run.state) && !["paused", "queued"].includes(run.state)) ?? runs.find(run => run.state === "queued") ?? null;
   };
 
+  /** This task's runs that recorded usage, each with the agent that answered it ('jolo' for Jolo's own loop). */
+  const answeredRuns = () => {
+    const sessionAgentId = sessionsRef.current.find((item) => item.id === sessionRef.current)?.agentId ?? null;
+    return (projection.current ? [...projection.current.runs.values()] : []).filter((run) => run.usage)
+      .map((run) => ({ run, agentId: run.agentId ?? sessionAgentId ?? 'jolo' }));
+  };
+
   /**
-   * What this task has cost. Tokens add up across its runs; how full the context is does not, so that comes
-   * from the most recent run that reported it. Nothing is filled in that the model did not report.
+   * What one agent has cost in this task. Each agent keeps a window of its own, so its tokens add up over its
+   * own runs and how full its context is comes from its most recent run that reported it; another agent's run
+   * says nothing about it. Nothing is filled in that the model did not report.
    */
-  const usageSummary = () => {
-    const runs = (projection.current ? [...projection.current.runs.values()] : []).filter((run) => run.usage);
+  const usageSummary = (agentId) => {
+    const runs = answeredRuns().filter((entry) => entry.agentId === agentId).map((entry) => entry.run);
     const totals = runs.reduce((sum, run) => ({
       inputTokens: sum.inputTokens + (run.usage.inputTokens ?? 0),
       outputTokens: sum.outputTokens + (run.usage.outputTokens ?? 0),
@@ -296,6 +304,9 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     const latest = runs.filter((run) => run.usage.contextWindow > 0).at(-1) ?? null;
     return { ...totals, runs: runs.length, contextUsed: latest?.usage.contextUsed ?? null, contextWindow: latest?.usage.contextWindow ?? null };
   };
+
+  /** The agents that have answered in this task, in the order they first did. */
+  const taskAgents = () => [...new Set(answeredRuns().map((entry) => entry.agentId))];
 
   const cancel = useCallback(async () => {
     const run = activeRun();
@@ -414,7 +425,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
     history: history.current,
     activeRun: activeRun(),
     queuedRuns: projection.current ? [...projection.current.runs.values()].filter(run => run.state === 'queued') : [],
-    usage: usageSummary(),
+    usageFor: usageSummary, taskAgents,
     pendingPermission: permissions.current.first, changes: working.changes, changesStatus: working.status, refreshChanges: working.refresh,
     board, refreshBoard, markViewed, openFromBoard, newFromBoard, decideFromBoard, stopFromBoard, resumeFromBoard,
     plans, refreshPlans,

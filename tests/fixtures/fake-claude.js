@@ -20,6 +20,32 @@ const MODELS = [
   { value: "fable", resolvedModel: "fake-fable-5-1", displayName: "Fable", description: "the capable one", supportsEffort: true, supportedEffortLevels: ["low", "high", "xhigh", "max"] },
   { value: "haiku", resolvedModel: "fake-haiku", displayName: "Haiku", description: "the quick one" },
 ];
+// The parts of a get_usage answer Jolo reads, in the shape Claude Code 2.1 sends.
+const USAGE = {
+  subscription_type: "max", rate_limits_available: true,
+  rate_limits: {
+    five_hour: { utilization: 16, resets_at: "2026-10-14T22:49:59.786341+00:00" },
+    seven_day: { utilization: 44, resets_at: "2026-10-19T06:59:59.786360+00:00" },
+    seven_day_opus: null, seven_day_sonnet: null,
+    model_scoped: [{ display_name: "Fable", utilization: 91, resets_at: "2026-10-19T06:59:59.786515+00:00" }],
+  },
+  behaviors: null,
+};
+// FAKE_CLAUDE_USAGE scripts the get_usage answer: unset sends USAGE, "error" refuses the request, "api-key" is how an
+// API-key sign-in answers (no plan limits), "unavailable" is how Claude answers while its usage endpoint fails with
+// nothing cached (rate_limits: null), "long" names a model and a plan past what agent.limits may carry, "hang"
+// never answers, and "exit" leaves without answering.
+const USAGE_MODE = process.env.FAKE_CLAUDE_USAGE ?? "";
+const answerUsage = (requestId) => {
+  if (USAGE_MODE === "error") return out({ type: "control_response", response: { subtype: "error", request_id: requestId, error: "fake-claude: usage endpoint returned 503" } });
+  if (USAGE_MODE === "api-key") return out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { subscription_type: null, rate_limits_available: false, rate_limits: null, behaviors: null } } });
+  if (USAGE_MODE === "unavailable") return out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { ...USAGE, rate_limits: null } } });
+  if (USAGE_MODE === "long") return out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { ...USAGE, subscription_type: "p".repeat(200), rate_limits: { ...USAGE.rate_limits, model_scoped: [{ display_name: "m".repeat(200), utilization: 7, resets_at: null }] } } } });
+  if (USAGE_MODE === "hang") return; // stays silent, as a CLI stuck before its answer would
+  if (USAGE_MODE === "exit") { process.stderr.write("fake-claude: scripted exit before answering get_usage\n"); process.exit(3); }
+  if (USAGE_MODE) { process.stderr.write(`fake-claude: unknown FAKE_CLAUDE_USAGE ${JSON.stringify(USAGE_MODE)}\n`); process.exit(64); }
+  out({ type: "control_response", response: { subtype: "success", request_id: requestId, response: USAGE } });
+};
 const sessionId = resumed ?? `fake-${Math.random().toString(36).slice(2, 10)}`;
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const pending = new Map();
@@ -144,6 +170,7 @@ for await (const chunk of Bun.stdin.stream()) {
     if (!line.trim()) continue;
     const message = JSON.parse(line);
     if (message.type === "control_request" && message.request?.subtype === "initialize") out({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: { commands: [], models: MODELS } } });
+    else if (message.type === "control_request" && message.request?.subtype === "get_usage") answerUsage(message.request_id);
     else if (message.type === "control_response") { const resolve = pending.get(message.response?.request_id); if (resolve) { pending.delete(message.response.request_id); resolve(message.response.response); } }
     // The turn must run alongside this loop: it will block on a permission answer that only this loop can read.
     else if (message.type === "user") void turn(typeof message.message?.content === "string" ? message.message.content : (message.message?.content ?? []).filter(part => part.type === "text").map(part => part.text).join(""), (Array.isArray(message.message?.content) ? message.message.content : []).filter(part => part.type === "image")).then(() => {

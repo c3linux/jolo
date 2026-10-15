@@ -380,6 +380,8 @@ export const AgentCatalogEntrySchema = z.object({
   effort: z.string().nullable(),
   supportsModel: z.boolean(),
   supportsEffort: z.boolean(),
+  /** Whether this agent can report the signed-in plan's usage limits (agent.limits). */
+  supportsLimits: z.boolean(),
 });
 
 export const AgentSessionSchema = z.object({
@@ -977,6 +979,18 @@ Object.assign(MethodSchemas, {
       efforts: z.array(z.string().max(40)),
       source: z.enum(["agent", "none"]),
       note: z.string().max(300).nullable(),
+    }),
+  },
+  // The signed-in account's usage windows, as the agent reports them; starting it makes this interactive too.
+  "agent.limits": {
+    params: z.object({ agentId: Id, refresh: z.boolean().optional().default(false) }),
+    result: z.object({
+      agentId: Id,
+      windows: z.array(z.object({ label: z.string().max(120), usedPercent: z.number().min(0), resetsAt: IsoTimestamp.nullable() })).max(20),
+      plan: z.string().max(80).nullable(),
+      source: z.enum(["agent", "none"]),
+      note: z.string().max(300).nullable(),
+      checkedAt: IsoTimestamp,
     }),
   },
   "agent.start": {

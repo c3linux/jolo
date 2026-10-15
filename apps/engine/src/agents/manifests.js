@@ -33,6 +33,9 @@ export const TRANSPORT_MODEL_SUPPORT = Object.freeze({
   acp: Object.freeze({ model: "flag", effort: "flag" }),
 });
 
+/** The transports that can say how much of the signed-in plan is used (Claude's get_usage, Codex's account/rateLimits/read). */
+export const LIMIT_REPORTING = Object.freeze(new Set(["claude-stream", "codex-app-server"]));
+
 export const BUILTIN_MANIFESTS = Object.freeze([
   // These speak a structured protocol: replies, tool calls and permission questions arrive as data, so they answer
   // as a Jolo session rather than in a watched terminal. Protocol flags are the adapter's; a manifest's args are
