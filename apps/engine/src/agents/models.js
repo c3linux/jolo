@@ -31,41 +31,55 @@ const model = ({ id, displayName, description, isDefault = false, efforts: level
 });
 
 /**
+ * Start a hosted agent, ask it one thing, and stop it. `open` speaks first; `ask` returns the answer once it
+ * has one. The agent's own failure never throws: it comes back as `{ note, timedOut }` for the caller to word.
+ * @param {{ supervisor: any, log: any }} deps
+ * @param {any} manifest
+ * @param {string[]} argv
+ * @param {{ open: (send: (message: any) => void) => void, ask: (message: any, send: (message: any) => void) => any }} steps
+ */
+export async function probeAgent({ supervisor, log }, manifest, argv, { open, ask }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  let link;
+  try {
+    link = spawnLineChild({ argv, cwd: tmpdir(), env: hostedEnvironment(supervisor), signal: controller.signal, log, agentId: manifest.id });
+  } catch (error) {
+    clearTimeout(timer);
+    return { note: `could not start ${manifest.displayName}: ${error?.message ?? error}`, timedOut: false };
+  }
+  let answer = null;
+  let failure = null;
+  try {
+    const send = (message) => link.write(message);
+    open(send);
+    for await (const message of link.messages()) {
+      answer = await ask(message, send);
+      if (answer) break;
+    }
+  } catch (error) {
+    failure = String(error?.message ?? error);
+  }
+  clearTimeout(timer);
+  link.terminate();
+  const { exitCode, stderr } = await link.settle();
+  if (answer) return answer;
+  if (controller.signal.aborted) return { note: `${manifest.displayName} did not answer within ${PROBE_TIMEOUT_MS / 1000} seconds`, timedOut: true };
+  return { note: failure ?? `${manifest.displayName} exited ${exitCode ?? "?"} without an answer${stderr ? `: ${stderr.slice(0, 200)}` : ""}`, timedOut: false };
+}
+
+/**
  * @param {{ catalog: any, supervisor: any, build?: string, log: any }} deps
  */
 export function createModelDirectory({ catalog, supervisor, build = "dev", log }) {
   const answered = new Map(); // agentId -> recent successful answer
   const pending = new Map(); // concurrent clients share one probe per agent
 
-  /** Start the agent, ask it, and stop it. `open` speaks first; `ask` returns the answer once it has one. */
-  const probe = async (manifest, argv, { open, ask }) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-    let link;
-    try {
-      link = spawnLineChild({ argv, cwd: tmpdir(), env: hostedEnvironment(supervisor), signal: controller.signal, log, agentId: manifest.id });
-    } catch (error) {
-      clearTimeout(timer);
-      return { models: [], note: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
-    }
-    let answer = null;
-    let failure = null;
-    try {
-      const send = (message) => link.write(message);
-      open(send);
-      for await (const message of link.messages()) {
-        answer = await ask(message, send);
-        if (answer) break;
-      }
-    } catch (error) {
-      failure = String(error?.message ?? error);
-    }
-    clearTimeout(timer);
-    link.terminate();
-    const { exitCode, stderr } = await link.settle();
-    if (answer) return answer;
-    if (controller.signal.aborted) return { models: [], note: `${manifest.displayName} did not answer within ${PROBE_TIMEOUT_MS / 1000} seconds; type the model name it expects` };
-    return { models: [], note: failure ?? `${manifest.displayName} exited ${exitCode ?? "?"} without a model list${stderr ? `: ${stderr.slice(0, 200)}` : ""}` };
+  /** The shared probe; an agent too slow to answer leaves the model field as free text. */
+  const probe = async (manifest, argv, steps) => {
+    const result = await probeAgent({ supervisor, log }, manifest, argv, steps);
+    if (Array.isArray(result.models)) return result;
+    return { models: [], note: result.timedOut ? `${result.note}; type the model name it expects` : result.note };
   };
 
   /** Claude lists its models in the reply to the same initialize the adapter sends every turn. */

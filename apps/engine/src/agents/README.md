@@ -4,6 +4,8 @@ This directory contains the hosted-agent catalog, protocol adapters, model disco
 
 Use `/model` in Jolo or `jolo agent list` to inspect configured agents. Hosted CLIs must already be installed and authenticated separately. User JSON manifests belong under `agents/` in the profile data directory; `catalog.js` reads them at engine startup and `manifests.js` defines the built-in defaults.
 
+The usage ring in the desktop composer opens a panel with a tab per agent: the one answering, any called into the task, and every installed agent that can report its plan. For Claude Code and Codex the tab also shows the signed-in plan's usage windows (for example the five-hour and weekly limits) from `agent.limits`, which asks Claude's `get_usage` control request or Codex's `account/rateLimits/read`; neither spends a model request. An answer about the account is kept for a minute; a refusal, an error or a timeout is asked again next time.
+
 Hosted programs run with the local user's privileges. Jolo mediates the operations exposed by their transports; it does not sandbox arbitrary programs at the operating-system level. See the [security policy](../../../../SECURITY.md) and [CLI guide](../../../cli/README.md).
 
 Each hosted turn receives a private scratch directory through `TMPDIR`, `TMP`, and `TEMP`, with instructions to use it for temporary files. Jolo's file permissions and the ACP file bridge allow that directory alongside the workspace; other temporary files remain outside the grant. Scratch files are removed when the turn completes or is cancelled. Finished mockups and visualizations belong in the workspace so their chat previews remain available.

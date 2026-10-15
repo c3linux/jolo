@@ -8,7 +8,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { AgentManifestSchema, ProtocolError } from "@jolo/protocol";
-import { BUILTIN_MANIFESTS, TRANSPORT_MODEL_SUPPORT } from "./manifests.js";
+import { BUILTIN_MANIFESTS, LIMIT_REPORTING, TRANSPORT_MODEL_SUPPORT } from "./manifests.js";
 import { compileRules } from "./status.js";
 
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -88,6 +88,7 @@ export function createCatalog({ dir, env, shell, settings = null, log }) {
           statusModel: manifest.statusModel, transport: manifest.transport,
           available: Boolean(resolvedPath), resolvedPath, source: manifest.source,
           model, effort, supportsModel: support.model !== "none", supportsEffort: support.effort !== "none",
+          supportsLimits: LIMIT_REPORTING.has(manifest.transport),
         };
       });
     },

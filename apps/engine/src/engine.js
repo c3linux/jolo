@@ -28,6 +28,7 @@ import { createHostedMcpConfig } from "./hosted-mcp.js";
 import { SELF_MENTION } from "./agents/mentions.js";
 import { createCatalog } from "./agents/catalog.js";
 import { createModelDirectory } from "./agents/models.js";
+import { createLimitDirectory } from "./agents/limits.js";
 import { AgentService } from "./agents/service.js";
 import { CapabilityTokens } from "./rpc/capabilities.js";
 import { createRpcServer } from "./rpc/server.js";
@@ -56,6 +57,7 @@ export function createEngine(options) {
   let storage = null;
   let settingsService = null;
   let agentModels = null;
+  let agentLimits = null;
   let credentials = null;
   let account = null;
   let permissions = null;
@@ -111,6 +113,7 @@ export function createEngine(options) {
     const providerFactory = new ProviderFactory({ credentials, catalog: providerCatalog, settings: settingsService, env: options.env ?? process.env, log, fetchImpl: options.fetchImpl });
     const catalog = createCatalog({ dir: paths.agentsDir, env: toolEnv, shell: (options.env ?? process.env).JOLO_SHELL ?? (options.env ?? process.env).SHELL ?? null, settings: settingsService, log });
     agentModels = createModelDirectory({ catalog, supervisor, build, log });
+    agentLimits = createLimitDirectory({ catalog, supervisor, build, log });
     agents = new AgentService({ catalog, terminals, storage, log });
     const jolo = createAgentExecutor({ storage, dispatcher, registry, providerFactory, settings: settingsService, permissions, interactiveClients: () => server?.interactiveClientCount ?? 0, log });
     const mcpConfig = createHostedMcpConfig({ paths, capabilityTokens, browser, search: toolEnv.tgrep ? search : null, log });
@@ -131,7 +134,7 @@ export function createEngine(options) {
     if (stopped.paused) log.warn("paused plans left running by a previous boot", stopped);
     schedules = createScheduler({ storage, runs, lifetime, log });
     endpoint = prepareEndpoint(paths);
-    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
+    const handlers = createRpcHandlers({ storage, settingsService, providerFactory, agentModels, agentLimits, credentials, account, tasks: new TaskService(account), permissions, dispatcher, browser, supervisor, search, terminals, board, worktrees, plans, schedules, delegations, agents, runs, paths, bootId, build, startedMs, startedAt, agentName, stop, getServer: () => server, toolEnv });
     server = createRpcServer({ token: endpoint.token, capabilityTokens, bootId, build, storage, previews: runs.previews, lifetime, log, handlers });
     await server.listen(paths.socketPath);
     // Beats missed while the engine was down each produce one check-in, after clients can attach.
