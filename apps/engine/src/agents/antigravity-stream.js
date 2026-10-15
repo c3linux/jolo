@@ -5,24 +5,27 @@
 // is a tool step that goes ACTIVE, then DONE or ERROR), then one `result` with the turn's status and usage. Every
 // step names the conversation, and `--conversation` continues it next turn.
 //
-// Print mode has no channel for permission questions: a tool that agy's own rules do not allow is refused on the
-// spot, listed in the result's `denied_actions`, and agy ends its turn. So Jolo cannot ask the user here, and it
-// grants agy nothing of its own: edits, commands and other tools run only where agy's settings.json allows them,
-// and a turn with a refusal fails, naming what to allow. Its accept-edits mode is not used, because it reaches
-// repository metadata such as .git/config, which Jolo keeps out of every agent's reach.
+// Print mode has no channel for permission questions, so agy's own checks are turned off and Jolo's gate decides
+// every tool call instead (see antigravity-gate.js): agy's PreToolUse hook hands each call to Jolo, which decides it
+// as it does for the other agents, by policy or by asking the user. Reads and edits pass inside the workspace and
+// the turn's scratch directory and are refused outside them, .git included; commands and other tools need a grant
+// or the user. A refused call reaches agy as the hook's reason, and agy carries on with its turn.
 //
 // Every shape below was read from agy 1.3.5 in live print-mode sessions.
-import { createHostedTurn, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
+import { createHostedTurn, digestOf, handoffParties, hostedEnvironment, recall, runChoice, spawnLineChild } from "./hosted.js";
 import { createSummarizer, handoffPrompt } from "./handoff.js";
+import { gateRequest, openGate } from "./antigravity-gate.js";
 import { inlineBrowserInstructions } from '../browser/instructions.js';
 import { standaloneChatInstructions } from '../agent/instructions.js';
 
 /**
- * The print-mode stream, as the binary spells it. The turn's scratch directory joins the workspace, and `--print=`
- * names an empty prompt, so the turn is read from stdin.
+ * The print-mode stream, as the binary spells it. agy's own permission checks give way to the gate's hook, which
+ * loads from the gate's directory; the turn's scratch directory joins the workspace, and `--print=` names an empty
+ * prompt, so the turn is read from stdin.
  */
-export const antigravityArgv = (binary, extraArgs, scratchDir, conversationId) => [
-  binary, ...extraArgs, "--input-format", "stream-json", "--output-format", "stream-json", "--add-dir", scratchDir,
+export const antigravityArgv = (binary, extraArgs, scratchDir, gateDir, conversationId) => [
+  binary, ...extraArgs, "--input-format", "stream-json", "--output-format", "stream-json",
+  "--dangerously-skip-permissions", "--add-dir", gateDir, "--add-dir", scratchDir,
   ...(conversationId ? ["--conversation", conversationId] : []),
   "--print=",
 ];
@@ -40,7 +43,9 @@ export function createAntigravityExecutor({ storage, catalog, permissions, super
       const workspace = storage.getWorkspace(session.workspaceId);
       const manifest = answerer ?? catalog.get(session.agentId);
       const [binary, ...extraArgs] = catalog.command(manifest, runChoice(ctx.run)); // the --model/--effort in force, plus any the manifest adds
-      const turn = createHostedTurn({ ctx, storage, permissions, manifest, session, workspace });
+      // Ends when agy has exited, so a decision still waiting on the user settles with the turn instead of after it.
+      const ended = new AbortController();
+      const turn = createHostedTurn({ ctx: { ...ctx, signal: AbortSignal.any([signal, ended.signal]) }, storage, permissions, manifest, session, workspace });
       const usage = { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0 };
       // Print mode takes text content only, so an attached image would be dropped without a word.
       if (run.attachments?.some(item => item.mimeType.startsWith('image/'))) {
@@ -49,16 +54,40 @@ export function createAntigravityExecutor({ storage, catalog, permissions, super
       }
       const remembered = recall(session, manifest).conversationId ?? null;
       const environment = turn.environment;
-      const argv = antigravityArgv(binary, extraArgs, environment.TMPDIR, remembered);
       const prompt = await handoffPrompt({ storage, run, session, resumed: Boolean(remembered), ...handoffParties({ catalog, session, manifest, storage, run, model: catalog.config(manifest, runChoice(ctx.run)).model }), summarize: createSummarizer({ providerFactory, settings, log, sessionId: session.id, runId: run.id }) });
       // Print mode has no system-prompt option, so Jolo's instructions lead the turn, as for ACP agents.
       const instructions = [inlineBrowserInstructions({ available: false, hosted: true }), standaloneChatInstructions(storage, session), turn.fileInstructions].filter(Boolean).join('\n\n');
+
+      /** Jolo's answer to the gate about one tool call: the same decision any other agent's call gets. */
+      const decideCall = async ({ toolCall }) => {
+        if (ended.signal.aborted) return { decision: "deny", reason: "The turn has ended." };
+        const name = String(toolCall?.name ?? "tool");
+        const args = toolCall?.args ?? {};
+        const decision = await turn.decide({ ...gateRequest(name, args, workspace.path), toolName: name, argumentDigest: digestOf({ tool: name, input: args }) });
+        return decision === "allow" ? { decision: "allow" } : { decision: "deny", reason: decision?.deny ?? "The run was cancelled in Jolo." };
+      };
+      // One decision at a time, as the other agents' calls arrive: a run waiting on the user stays awaiting permission.
+      let decided = Promise.resolve();
+      const answer = (call) => {
+        const next = decided.then(() => decideCall(call));
+        decided = next.then(() => {}, () => {});
+        return next;
+      };
+      let gate;
+      try {
+        gate = await openGate({ answer });
+      } catch (error) {
+        turn.finish({ usage });
+        return { outcome: "failed", failure: `could not open Jolo's permission gate for ${manifest.displayName}: ${error?.message ?? error}` };
+      }
+      const argv = antigravityArgv(binary, extraArgs, environment.TMPDIR, gate.dir, remembered);
 
       const state = { replies: new Map(), result: null, failure: null }; // agent_response step index -> message id
       let link;
       try {
         link = spawnLineChild({ argv, cwd: workspace.path, env: hostedEnvironment(supervisor, environment), signal, log, agentId: manifest.id });
       } catch (error) {
+        gate.close();
         turn.finish({ usage });
         return { outcome: "failed", failure: `could not start ${manifest.displayName}: ${error?.message ?? error}` };
       }
@@ -116,16 +145,14 @@ export function createAntigravityExecutor({ storage, catalog, permissions, super
         state.failure = String(error?.message ?? error);
       }
       const { exitCode, stderr } = await link.settle();
+      ended.abort();
+      gate.close();
       for (const messageId of state.replies.values()) ctx.finishMessage(messageId, "interrupted");
       turn.finish({ usage });
       if (signal.aborted) return { outcome: "cancelled" };
       if (state.failure) return { outcome: "failed", failure: state.failure.slice(0, 500) };
       if (!state.result) return { outcome: "failed", failure: `${manifest.displayName} exited ${exitCode ?? "?"} without a result${stderr ? `: ${stderr.slice(0, 300)}` : ""}` };
       if (state.result.status !== "SUCCESS") return { outcome: "failed", failure: `${manifest.displayName}: ${String(state.result.error || state.result.status || "error")}`.slice(0, 500) };
-      // A refused step can even read DONE, so the result's list is what says agy stopped short.
-      // Each refusal names agy's permission key ("command", "write_file"), which is also how its allow rules are spelled.
-      const denied = (state.result.denied_actions ?? []).map((action) => action?.action || action?.display_name).filter(Boolean);
-      if (denied.length) return { outcome: "failed", failure: `${manifest.displayName} refused ${denied.join(", ")}: its print mode cannot ask for permission. Allow it with a rule such as ${denied[0]}(<target>) under permissions.allow in ~/.gemini/antigravity-cli/settings.json.`.slice(0, 500) };
       return { outcome: "completed" };
     },
   };
