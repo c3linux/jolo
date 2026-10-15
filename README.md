@@ -6,7 +6,7 @@
 
 A desktop app and CLI for working with coding agents.
 
-Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, or your own API provider. Keep your chats, files, terminal, and browser in one workspace.
+Use Claude Code, Codex, Devin CLI, Grok CLI, Gemini CLI, Antigravity CLI, or your own API provider. Keep your chats, files, terminal, and browser in one workspace.
 
 [Download](https://github.com/jolo-build/jolo/releases/latest) · [Website](https://jolo.build) · [User guide](https://docs.jolo.build) · [Report a bug](https://github.com/jolo-build/jolo/issues)
 

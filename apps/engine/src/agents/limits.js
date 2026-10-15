@@ -1,8 +1,8 @@
 // How much of a hosted agent's plan is left, asked of the agent itself.
 //
-// Claude Code and Codex both know the signed-in account's usage windows (a five-hour window, a weekly one,
-// sometimes one per model) and both answer without spending a model request: Claude through its get_usage
-// control request, Codex through account/rateLimits/read. Jolo only reshapes the answer into windows the
+// Claude Code, Codex and Antigravity all know the signed-in account's usage windows (a five-hour window, a weekly
+// one, sometimes one per model or model group) and answer without spending a model request: Claude through its
+// get_usage control request, Codex through account/rateLimits/read, Antigravity through its /usage command. Jolo only reshapes the answer into windows the
 // composer's usage panel can show side by side. An answer about the account is kept briefly, since opening the
 // panel again a moment later should not start the agent again; a passing failure is asked again next time.
 import { claudeArgv } from "./claude-stream.js";
@@ -10,6 +10,9 @@ import { probeAgent } from "./models.js";
 import { LIMIT_REPORTING } from "./manifests.js";
 
 const CACHE_TTL_MS = 60_000;
+// Only agent.limits waits on these probes, and clients give it 65 s (packages/client). Antigravity's /usage signs in
+// to Google first and took 5 to 8 s, once 16 s, so a limits probe gets longer than a model probe.
+const PROBE_TIMEOUT_MS = 15_000;
 const MAX_WINDOWS = 20;
 // What agent.limits may carry (packages/protocol/src/schemas.js): a longer vendor name is cut, never a failed call.
 const MAX_LABEL = 120;
@@ -87,6 +90,27 @@ export function codexWindows(result) {
   return { windows: windows.slice(0, MAX_WINDOWS), plan, source: windows.length ? "agent" : "none", note: windows.length ? null : "Codex reports no usage limits for this sign-in" };
 }
 
+/** Antigravity's window lengths, as its /usage command spells them. */
+const ANTIGRAVITY_WINDOWS = Object.freeze({ "5h": "5-hour", weekly: "Weekly" });
+
+/**
+ * Antigravity's /usage answer as windows. Each model group (Gemini models, the Claude and GPT models) has its own
+ * five-hour and weekly bucket, and each bucket says what fraction is left; a window is labelled with its group, as
+ * Codex's named buckets are.
+ * @returns {LimitAnswer}
+ */
+export function antigravityWindows(usage) {
+  const groups = Array.isArray(usage?.groups) ? usage.groups : [];
+  const windows = groups.flatMap((group) => (Array.isArray(group?.buckets) ? group.buckets : [])
+    .filter((bucket) => percent(bucket?.remaining_fraction) !== null)
+    .map((bucket) => {
+      const length = ANTIGRAVITY_WINDOWS[bucket.window] ?? text(bucket.name) ?? "Usage";
+      const name = text(group.name)?.replace(/\s+models$/i, ""); // "Gemini Models" reads as "Gemini" in a narrow row
+      return { label: name ? `${length} · ${name}` : length, usedPercent: Math.max(0, (1 - bucket.remaining_fraction) * 100), resetsAt: instant(bucket.reset_time) };
+    }));
+  return { windows: windows.slice(0, MAX_WINDOWS), plan: null, source: windows.length ? "agent" : "none", note: windows.length ? null : "Antigravity CLI reports no usage limits for this sign-in" };
+}
+
 /**
  * @param {{ catalog: any, supervisor: any, build: string, log: any }} deps
  */
@@ -97,7 +121,7 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
   /** Claude answers get_usage on the same structured stream a turn uses; skip_behaviors leaves out its transcript scan. */
   const fromClaude = (manifest) => {
     const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
-    return probeAgent({ supervisor, log }, manifest, claudeArgv(binary, extraArgs), {
+    return probeAgent({ supervisor, log }, manifest, claudeArgv(binary, extraArgs), PROBE_TIMEOUT_MS, {
       open: (send) => send({ type: "control_request", request_id: "jolo-limits", request: { subtype: "get_usage", skip_behaviors: true } }),
       ask: (message) => {
         if (message.type !== "control_response" || message.response?.request_id !== "jolo-limits") return null; // it may greet first
@@ -110,7 +134,7 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
   /** Codex reads the account's rate limits from its app-server after the usual handshake. */
   const fromCodex = (manifest) => {
     const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
-    return probeAgent({ supervisor, log }, manifest, [binary, ...extraArgs, "app-server"], {
+    return probeAgent({ supervisor, log }, manifest, [binary, ...extraArgs, "app-server"], PROBE_TIMEOUT_MS, {
       open: (send) => send({ id: 1, method: "initialize", params: { clientInfo: { name: "jolo", title: "Jolo", version: build }, capabilities: { experimentalApi: false } } }),
       ask: (message, send) => {
         if (message.id === 1) {
@@ -126,6 +150,19 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
     });
   };
 
+  /** Antigravity answers its /usage command with one JSON result when asked for JSON output. */
+  const fromAntigravity = (manifest) => {
+    const [binary, ...extraArgs] = catalog.command(manifest, { model: null, effort: null });
+    return probeAgent({ supervisor, log }, manifest, [binary, ...extraArgs, "--output-format", "json", "--print=/usage"], PROBE_TIMEOUT_MS, {
+      open: () => {},
+      ask: (message) => {
+        if (message.status && message.status !== "SUCCESS") return { windows: [], plan: null, note: text(message.error) ?? "Antigravity CLI could not read its usage limits" };
+        return message.command?.name === "usage" ? antigravityWindows(message.command.data) : null;
+      },
+    });
+  };
+  const readers = { "claude-stream": fromClaude, "codex-app-server": fromCodex, "antigravity-stream": fromAntigravity };
+
   return {
     /** Ask one agent how much of its plan is used. Never throws for a vendor's own failure: that becomes the note. */
     async read(agentId, { refresh }) {
@@ -137,7 +174,7 @@ export function createLimitDirectory({ catalog, supervisor, build, log }) {
       const remembered = answered.get(agentId);
       if (!refresh && remembered && Date.now() < remembered.expiresAt) return remembered.answer;
       const request = (async () => {
-        const result = manifest.transport === "claude-stream" ? await fromClaude(manifest) : await fromCodex(manifest);
+        const result = await readers[manifest.transport](manifest);
         /** @type {LimitReport} */
         const answer = {
           agentId,

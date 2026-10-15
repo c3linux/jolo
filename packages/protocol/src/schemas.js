@@ -306,8 +306,8 @@ export const AGENT_STATUSES = Object.freeze(["starting", "working", "needs_input
 export const AGENT_STATUS_SOURCES = Object.freeze(["process", "screen", "silence"]);
 export const AGENT_LIMITS = Object.freeze({ maxRules: 40, maxAgents: 8, minIdleMs: 500, maxIdleMs: 120_000 });
 /** pty: a terminal Jolo watches. The rest are structured transports, driven turn by turn as a Jolo session: Claude Code's
- *  stream, Codex's app-server, or the Agent Client Protocol spoken by any agent that offers it. */
-export const AGENT_TRANSPORTS = Object.freeze(["pty", "claude-stream", "codex-app-server", "acp"]);
+ *  stream, Codex's app-server, the Agent Client Protocol spoken by any agent that offers it, or Antigravity's print-mode stream. */
+export const AGENT_TRANSPORTS = Object.freeze(["pty", "claude-stream", "codex-app-server", "acp", "antigravity-stream"]);
 
 export const AgentRuleSchema = z.object({
   id: z.string().min(1).max(64),

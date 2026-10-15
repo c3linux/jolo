@@ -547,8 +547,8 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
     if (!placed.onScreen || placed.rows !== 4 || placed.clipped || !placed.onTop) throw new Error(`the usage panel is not fully shown: ${JSON.stringify(placed)}`);
     await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     writeFileSync(path.join(results, "usage.png"), (await window.webContents.capturePage()).toPNG());
-    // Hosted agents that report their plan get a tab of their own. The fixtures answer get_usage and
-    // account/rateLimits/read with fixed numbers (tests/fixtures/fake-claude.js, tests/fixtures/fake-codex.js).
+    // Hosted agents that report their plan get a tab of their own. The fixtures answer get_usage,
+    // account/rateLimits/read and /usage with fixed numbers (tests/fixtures/fake-claude.js, fake-codex.js, fake-agy.js).
     const usagePage = () => evaluate(`(() => {
       const node = document.querySelector(".usage-panel");
       if (!node) return { open: false };
@@ -572,11 +572,12 @@ export async function runSmoke(window, bridge, browserHost, { ROOT, BUILD, log }
       };
     })()`);
     const joloPage = await usagePage();
-    if (JSON.stringify(joloPage.tabs) !== JSON.stringify(["Jolo", "Claude Code", "Codex"])) throw new Error(`the usage panel should have a tab for Jolo and for each hosted agent that reports its plan: ${JSON.stringify(joloPage)}`);
+    if (JSON.stringify(joloPage.tabs) !== JSON.stringify(["Jolo", "Claude Code", "Codex", "Antigravity CLI"])) throw new Error(`the usage panel should have a tab for Jolo and for each hosted agent that reports its plan: ${JSON.stringify(joloPage)}`);
     if (joloPage.selected !== "Jolo" || joloPage.page !== "Jolo" || joloPage.hasLimits) throw new Error(`the usage panel should open on the answering agent, and Jolo's page has no plan limits: ${JSON.stringify(joloPage)}`);
     const expectedLimits = [
       { tab: "Claude Code", plan: "max", rows: [["5-hour", "16%"], ["Weekly", "44%"], ["Weekly · Fable", "91%"]] },
       { tab: "Codex", plan: "pro", rows: [["5-hour", "17%"], ["Weekly", "40%"]] },
+      { tab: "Antigravity CLI", plan: null, rows: [["Weekly · Gemini", "3%"], ["5-hour · Gemini", "13%"], ["Weekly · Claude and GPT", "0%"], ["5-hour · Claude and GPT", "0%"]] },
     ];
     let previous = joloPage;
     for (const expected of expectedLimits) {
