@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ROOT, startEngine, tempHome, waitFor, removeHome } from "./helpers.js";
 
@@ -61,27 +61,51 @@ describe("Antigravity CLI through its print-mode stream", () => {
     expect(second.usage).toMatchObject({ inputTokens: 140, outputTokens: 6, iterations: 1 });
   }, 40_000);
 
-  test("tool steps become Jolo tool records, and a turn agy refused something in fails with where to allow it, without asking anyone", async () => {
-    const { events, repo, runTo, text, messagesOf } = await boot();
+  test("Jolo's gate decides every tool call: workspace edits pass, outside reads and .git are refused by policy, and a command asks the user", async () => {
+    const { client, events, home, repo, runTo, text, messagesOf } = await boot();
     const target = path.join(repo, "made.txt");
     const write = await runTo("req_write", `write ${target} hello from agy`);
     expect(write.state).toBe("completed");
     expect(readFileSync(target, "utf8")).toBe("hello from agy");
     const messages = await messagesOf(write.id);
     expect(messages.map((m) => m.kind)).toEqual(["text", "tool", "text"]);
-    expect(await text(messages[1])).toContain(`write_to_file {"TargetFile":${JSON.stringify(target)}}`);
+    expect(await text(messages[1])).toContain(`write_to_file {"TargetFile":${JSON.stringify(target)}`);
     expect(events.find((e) => e.type === "tool.completed" && e.runId === write.id).payload).toMatchObject({ name: "antigravity:write_to_file", status: "ok" });
 
-    const refused = await runTo("req_cmd", "run touch should-not-exist");
-    expect(refused).toMatchObject({ state: "failed", failure: "Antigravity CLI refused command: its print mode cannot ask for permission. Allow it with a rule such as command(<target>) under permissions.allow in ~/.gemini/antigravity-cli/settings.json." });
-    const tool = (await messagesOf(refused.id)).find((m) => m.kind === "tool");
-    expect(await text(tool)).toContain("user denied permission to run command");
-    expect(events.find((e) => e.type === "tool.completed" && e.runId === refused.id).payload).toMatchObject({ name: "antigravity:run_command", status: "error" });
-
-    // agy can report a refused step as DONE; only the result's list tells, and the run still fails.
-    const quiet = await runTo("req_quiet", `refuse-write ${path.join(repo, "never.txt")}`);
-    expect(quiet).toMatchObject({ state: "failed", failure: expect.stringContaining("refused write_file") });
+    // Refused by Jolo's policy without asking anyone; agy is told why and finishes its turn.
+    const secret = path.join(home, "secret.txt");
+    writeFileSync(secret, "outside");
+    const outside = await runTo("req_read", `read ${secret}`);
+    expect(outside.state).toBe("completed");
+    expect(await text((await messagesOf(outside.id)).at(-1))).toBe(`I could not read ${secret}: tool call denied by pre-tool hook: Jolo policy: view_file outside the workspace is not allowed\n`);
+    expect(events.find((e) => e.type === "tool.completed" && e.runId === outside.id).payload).toMatchObject({ name: "antigravity:view_file", status: "error" });
+    const git = await runTo("req_git", `write ${path.join(repo, ".git", "config")} [core]`);
+    expect(await text((await messagesOf(git.id)).at(-1))).toContain("Jolo policy: write_to_file outside the workspace is not allowed");
     expect(events.some((e) => e.type === "permission.requested")).toBe(false);
+
+    // A command needs the user, through the same permission request as any other agent's.
+    let asked = null;
+    client.onEvent((event) => { if (event.type === "permission.requested" && !asked) { asked = event.payload; void client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: "allow_once" }); } });
+    const command = await runTo("req_cmd", "run echo hosted-ok");
+    expect(command.state).toBe("completed");
+    expect(asked).toMatchObject({ tool: "antigravity:run_command", summary: "run_command: echo hosted-ok", script: "echo hosted-ok", cwd: realpathSync(repo) });
+    expect(await text((await messagesOf(command.id)).at(-1))).toBe("The command printed: hosted-ok\n");
+  }, 40_000);
+
+  test("a declined command reaches agy as Jolo's reason, and a subagent's own command asks like any other", async () => {
+    const { client, events, runTo, text, messagesOf } = await boot();
+    const decisions = ["deny", "allow_once"];
+    const asked = [];
+    client.onEvent((event) => { if (event.type === "permission.requested") { asked.push(event.payload.tool); void client.call("permission.resolve", { permissionId: event.payload.permissionId, decision: decisions.shift() }); } });
+    const declined = await runTo("req_deny", "run touch should-not-exist");
+    expect(declined.state).toBe("completed");
+    expect(await text((await messagesOf(declined.id)).at(-1))).toBe("I could not run it: tool call denied by pre-tool hook: The user declined this action in Jolo.\n");
+    expect(events.find((e) => e.type === "tool.completed" && e.runId === declined.id).payload).toMatchObject({ name: "antigravity:run_command", status: "error" });
+
+    const delegated = await runTo("req_sub", "subagent echo from-subagent");
+    expect(delegated.state).toBe("completed");
+    expect(await text((await messagesOf(delegated.id)).at(-1))).toBe("The subagent's command printed: from-subagent\n");
+    expect(asked).toEqual(["antigravity:run_command", "antigravity:run_command"]); // starting the subagent asked nothing
   }, 40_000);
 
   test("a failed turn names the agent, and a cancelled turn stops it", async () => {
@@ -122,6 +146,6 @@ describe("Antigravity CLI through its print-mode stream", () => {
     await client.call("settings.update", { agents: { antigravity: { model: "gemini-4-argon", effort: "low" } } });
     const run = await runTo("req_model", "model");
     expect(run.state).toBe("completed");
-    expect(await text((await messagesOf(run.id))[1])).toMatch(/^Running gemini-4-argon at low with \S*jolo-agent-\S+ added\.\n$/); // the turn's scratch directory
+    expect(await text((await messagesOf(run.id))[1])).toMatch(/^Running gemini-4-argon at low with \S*jolo-gate-\S+ and \S*jolo-agent-\S+ added\.\n$/); // the gate's directory and the turn's scratch directory
   }, 40_000);
 });
