@@ -61,6 +61,8 @@ export const UsageSchema = z.object({
   iterations: z.number().int().nonnegative().default(0),
   contextUsed: z.number().int().nonnegative().nullable().default(null),
   contextWindow: z.number().int().positive().nullable().default(null),
+  /** The agent whose window contextUsed/contextWindow describe, when a hosted agent answered the run. */
+  agentId: Id.nullable().optional(),
 });
 
 export const RunNoteSchema = z.object({

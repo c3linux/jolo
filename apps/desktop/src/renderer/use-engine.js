@@ -286,7 +286,7 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
   const answeredRuns = () => {
     const sessionAgentId = sessionsRef.current.find((item) => item.id === sessionRef.current)?.agentId ?? null;
     return (projection.current ? [...projection.current.runs.values()] : []).filter((run) => run.usage)
-      .map((run) => ({ run, agentId: run.agentId ?? sessionAgentId ?? 'jolo' }));
+      .map((run) => ({ run, agentId: run.usage.agentId ?? run.agentId ?? sessionAgentId ?? 'jolo' }));
   };
 
   /**
@@ -301,7 +301,8 @@ export function useEngine({ restoreLastProject = false, initialProject = null, i
       outputTokens: sum.outputTokens + (run.usage.outputTokens ?? 0),
       iterations: sum.iterations + (run.usage.iterations ?? 0),
     }), { inputTokens: 0, outputTokens: 0, iterations: 0 });
-    const latest = runs.filter((run) => run.usage.contextWindow > 0).at(-1) ?? null;
+    // A run written before usage named its agent may belong to another agent's window, so it never fills this one.
+    const latest = runs.filter((run) => run.usage.agentId === agentId && run.usage.contextWindow > 0).at(-1) ?? null;
     return { ...totals, runs: runs.length, contextUsed: latest?.usage.contextUsed ?? null, contextWindow: latest?.usage.contextWindow ?? null };
   };
 
