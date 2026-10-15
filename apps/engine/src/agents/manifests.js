@@ -45,7 +45,6 @@ export const BUILTIN_MANIFESTS = Object.freeze([
   hostedAgent("codex", "Codex", "codex", "OpenAI's coding agent CLI, driven through its app-server.", "codex-app-server"),
   hostedAgent("grok", "Grok CLI", "grok", "xAI's coding agent CLI, driven through the Agent Client Protocol.", "acp", ["--permission-mode", "default", "agent", "stdio"], { modelArgs: ["-m", "{model}"], effortArgs: ["--reasoning-effort", "{effort}"] }),
   hostedAgent("devin", "Devin CLI", "devin", "Cognition’s local coding agent, using your Devin CLI login through ACP.", "acp", ["acp"], { modelArgs: ["--model", "{model}"], modelArgsPosition: "after" }),
-  hostedAgent("gemini", "Gemini CLI", "gemini", "Google's coding agent CLI, driven through the Agent Client Protocol.", "acp", ["--acp"], { modelArgs: ["-m", "{model}"] }),
   hostedAgent("antigravity", "Antigravity CLI", "agy", "Google's Antigravity agent CLI, driven through its print-mode stream.", "antigravity-stream", [], { modelArgs: ["--model", "{model}"], effortArgs: ["--effort", "{effort}"] }),
   {
     id: "shell",
