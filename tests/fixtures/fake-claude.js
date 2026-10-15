@@ -66,6 +66,8 @@ async function turn(prompt, images = []) {
     for (const piece of text.match(text.length > 32768 ? /.{1,4096}/gsu : /.{1,12}/gsu) ?? []) out({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: piece } }, session_id: sessionId });
     out({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, session_id: sessionId });
     out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, session_id: sessionId });
+    // The final usage of the call arrives on message_delta, as Claude Code 2.1 sends it: this is how full the window is.
+    out({ type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 40000, output_tokens: 5 } }, session_id: sessionId });
     out({ type: "stream_event", event: { type: "message_stop" }, session_id: sessionId });
   };
   const tool = async (name, input, produce) => {
@@ -157,7 +159,7 @@ async function turn(prompt, images = []) {
   } else {
     say(resumed ? `Continuing session ${sessionId}: ${prompt}` : `You said: ${prompt}`);
   }
-  out({ type: "result", subtype: "success", is_error: false, result: "done", session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 } });
+  out({ type: "result", subtype: "success", is_error: false, result: "done", session_id: sessionId, num_turns: turns, duration_ms: 5, stop_reason: "end_turn", total_cost_usd: 0.001, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 20, output_tokens: 7 }, modelUsage: { fake: { contextWindow: 1_000_000, maxOutputTokens: 64_000 } } });
 }
 
 let buffered = "";

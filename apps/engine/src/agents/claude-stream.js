@@ -36,6 +36,20 @@ export function describeTool(toolName, input) {
   return { summary: `${toolName}${target ? ` ${target}` : ""}`, script: `${toolName} ${JSON.stringify(input ?? {})}` };
 }
 
+/**
+ * One call's usage as Claude Code itself merges it: message_start carries what was sent, and a message_delta's
+ * input counts replace those only when positive, since some providers send them empty; the output is the delta's.
+ */
+const mergedUsage = (start, delta) => ({
+  input_tokens: delta.input_tokens > 0 ? delta.input_tokens : start?.input_tokens ?? 0,
+  cache_creation_input_tokens: delta.cache_creation_input_tokens > 0 ? delta.cache_creation_input_tokens : start?.cache_creation_input_tokens ?? 0,
+  cache_read_input_tokens: delta.cache_read_input_tokens > 0 ? delta.cache_read_input_tokens : start?.cache_read_input_tokens ?? 0,
+  output_tokens: delta.output_tokens ?? start?.output_tokens ?? 0,
+});
+
+/** How full the window was at one model call: everything it was sent, plus what it wrote back into the window. */
+const contextOf = (call) => (call ? (call.input_tokens ?? 0) + (call.cache_creation_input_tokens ?? 0) + (call.cache_read_input_tokens ?? 0) + (call.output_tokens ?? 0) : null);
+
 /** The stream-json host mode, as the binary spells it. Exported so model discovery can open the same channel. */
 export const claudeArgv = (binary, extraArgs, claudeSessionId = null) => [
   binary, ...extraArgs, "--print", "--verbose",
@@ -73,8 +87,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
 
       const state = {
         blocks: new Map(), // stream block index -> { kind, messageId }
-        usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, attempts: 1, iterations: 0, contextUsed: null, contextWindow: null },
         result: null, failure: null,
+        model: null, // the main model as Claude names it in its usage report
+        lastCall: null, // the main thread's latest model call, which is how full the window is now
       };
       let link;
       try {
@@ -124,6 +140,7 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
             return;
           case "control_request": return onControlRequest(message);
           case "system":
+            if (message.subtype === "init" && message.model) state.model = message.model;
             if (message.subtype === "init" && message.session_id && session.agentState?.claudeSessionId !== message.session_id) turn.remember({ claudeSessionId: message.session_id });
             return;
           case "stream_event": {
@@ -142,6 +159,10 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
               const block = state.blocks.get(event.index);
               finishBlock(block, "complete");
               if (block) state.blocks.set(event.index, { ...block, messageId: null, done: true });
+            } else if (event.type === "message_start" && event.message?.usage) {
+              state.lastCall = event.message.usage;
+            } else if (event.type === "message_delta" && event.usage) {
+              state.lastCall = mergedUsage(state.lastCall, event.usage);
             } else if (event.type === "message_stop") {
               state.blocks.clear();
             }
@@ -162,7 +183,11 @@ export function createClaudeStreamExecutor({ storage, catalog, permissions, supe
           case "result": {
             state.result = message;
             const usage = message.usage ?? {};
-            state.usage = { inputTokens: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0), outputTokens: usage.output_tokens ?? 0, attempts: 1, iterations: message.num_turns ?? 0 };
+            const window = message.modelUsage?.[state.model]?.contextWindow;
+            state.usage = {
+              inputTokens: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0), outputTokens: usage.output_tokens ?? 0, attempts: 1, iterations: message.num_turns ?? 0,
+              contextUsed: contextOf(state.lastCall), contextWindow: Number.isInteger(window) && window > 0 ? window : null,
+            };
             link.end();
             link.terminate({ graceful: true });
             return;

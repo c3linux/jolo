@@ -224,7 +224,7 @@ export function createHostedTurn({ ctx, storage, permissions, manifest, session,
       const recorded = {
         inputTokens: Math.max(0, usage.inputTokens | 0), outputTokens: Math.max(0, usage.outputTokens | 0),
         attempts: Math.max(1, usage.attempts | 0), iterations: Math.max(0, usage.iterations | 0),
-        contextUsed: usage.contextUsed ?? null, contextWindow: usage.contextWindow ?? null,
+        contextUsed: usage.contextUsed ?? null, contextWindow: usage.contextWindow ?? null, agentId: manifest.id,
       };
       storage.transaction(() => {
         storage.updateRunUsage(run.id, recorded);
