@@ -19,6 +19,12 @@ const CACHE_TTL_MS = 5 * 60_000;
 const text = (value, fallback = "") => (typeof value === "string" && value ? value : fallback);
 const efforts = (list) => [...new Set((Array.isArray(list) ? list : []).map((entry) => (typeof entry === "string" ? entry : text(entry?.reasoningEffort ?? entry?.id ?? entry?.value))).filter(Boolean))];
 
+/**
+ * Claude's levels plus "ultracode" where the model has xhigh: `--effort ultracode` runs xhigh with standing
+ * Workflow orchestration, and Claude Code gates ultracode on the same xhigh capability.
+ */
+const claudeEfforts = (levels) => (Array.isArray(levels) && levels.includes("xhigh") ? [...levels, "ultracode"] : levels);
+
 /** One model as Jolo offers it, whatever the vendor called its fields. */
 const model = ({ id, displayName, description, isDefault = false, efforts: levels = [] }) => ({
   id, displayName: text(displayName, id), description: text(description), isDefault: Boolean(isDefault), efforts: efforts(levels).slice(0, 20),
@@ -78,7 +84,7 @@ export function createModelDirectory({ catalog, supervisor, build = "dev", log }
             displayName: entry.displayName,
             description: [text(entry.description), text(entry.resolvedModel) && entry.resolvedModel !== entry.value ? `(${entry.resolvedModel})` : ""].filter(Boolean).join(" "),
             isDefault: entry.value === "default",
-            efforts: entry.supportsEffort ? entry.supportedEffortLevels : [],
+            efforts: entry.supportsEffort ? claudeEfforts(entry.supportedEffortLevels) : [],
           })),
           note: null,
         };
